@@ -1,1 +1,0 @@
-minimum attendance policy to sit in an exam is 50%

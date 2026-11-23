@@ -1,142 +1,250 @@
-"""Every tool reads the patient from runtime.context, never from a model argument."""
+"""The 8 ShopBot tools.
+
+Rule for every tool: the customer is runtime.context.user_id (set by the server), never a
+model argument. So even a fooled model can't read or change another customer's data.
+
+Orders and cancellations are two steps: place_order / cancel_order only STAGE a
+pending_action in the thread's state; confirm_action runs it, and only when the latest
+customer message is a NEW message saying yes.
+"""
+import json
 import re
-from datetime import datetime
 from uuid import uuid4
 
-from langchain.messages import ToolMessage
+from langchain.messages import HumanMessage, ToolMessage
 from langchain.tools import ToolRuntime, tool
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 
-from app.context import PATIENTS, CareContext
+from app.context import MEMORY_LIMIT, ShopContext
+from app import db   # db.query(...), not query(...): search_products has a 'query' argument
 
-# In-memory fake database (a real app would use its EHR / database here)
-READINGS = [
-    {"patient": "p-001", "kind": "blood_pressure", "value": "142/90", "time": "2026-11-18 08:00"},
-    {"patient": "p-001", "kind": "blood_pressure", "value": "136/86", "time": "2026-11-20 08:00"},
-    {"patient": "p-002", "kind": "glucose", "value": "138", "time": "2026-11-20 07:30"},
-    {"patient": "p-002", "kind": "glucose", "value": "320", "time": "2026-11-21 07:30"},
-]
-SYMPTOMS = []
-APPOINTMENTS = []
-FREE_SLOTS = ["2026-11-25 09:00", "2026-11-25 14:30", "2026-11-27 11:00"]
+MAX_RESULTS = 8
+MAX_QUANTITY = 10
+STOP_WORDS = {"the", "and", "for", "with", "under", "below", "over", "show", "want", "need", "any",
+              "some", "have", "you", "your", "me", "my", "a", "an", "of", "in", "to", "rs", "pkr"}
+YES = re.compile(r"^\s*(yes|yeah|yep|yup|y|confirm(ed)?|ok(ay)?|sure|haan|han|ji|jee|go ahead|"
+                 r"place it|place the order|do it)\b", re.I)
+SENSITIVE = re.compile(r"\b(?:\d[ -]?){12,19}\b|password|passcode|\bpin\b|\bcvv\b|\bcnic\b|iban", re.I)
 
 
-def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+def as_json(data) -> str:
+    """Compact tool results keep tokens (and cost) low."""
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
-def is_urgent(patient_token: str, kind: str, value: str) -> bool:
-    # CUSTOM: clinical thresholds are policy, set per patient by a doctor
-    limits = PATIENTS[patient_token]["thresholds"]
-    numbers = [int(n) for n in re.findall(r"\d+", value)]
-    if kind == "blood_pressure" and len(numbers) >= 2:
-        return numbers[0] >= limits.get("systolic", 999) or numbers[1] >= limits.get("diastolic", 999)
-    if kind == "glucose" and numbers:
-        return numbers[0] >= limits.get("glucose_high", 9999) or numbers[0] <= limits.get("glucose_low", 0)
-    return False
+def user_of(runtime: ToolRuntime[ShopContext]) -> str:
+    return runtime.context.user_id
 
 
-# ── care (notebooks 01 and 03) ──
+def reply(runtime, text: str, **state_update) -> Command:
+    """Return a tool result plus a state update (used to stage or clear pending_action)."""
+    return Command(update={**state_update,
+                           "messages": [ToolMessage(text, tool_call_id=runtime.tool_call_id)]})
 
-@tool
-def get_care_plan(runtime: ToolRuntime[CareContext]) -> str:
-    """Get the patient's care plan: condition, target and medicines."""
-    p = PATIENTS[runtime.context.patient_token]
-    return f"Condition: {p['condition']}. Target: {p['target']}. Medicines: {', '.join(p['medications'])}."
 
+def human_count(runtime) -> int:
+    return sum(isinstance(m, HumanMessage) for m in runtime.state.get("messages", []))
+
+
+# ── catalogue ──
 
 @tool
-def log_reading(kind: str, value: str, runtime: ToolRuntime[CareContext]) -> str:
-    """Log a home reading. kind is 'blood_pressure' (value like '128/82') or 'glucose' (value in mg/dL like '140')."""
-    patient = runtime.context.patient_token
+def search_products(query: str = "", category: str = "", max_price: int | None = None,
+                    min_price: int | None = None, in_stock_only: bool = False) -> str:
+    """Search the Bazaar Lane catalogue. Use it for EVERY question about products, prices or stock.
+    query: words like 'earbuds' or 'gift mother'; category: Clothing, Footwear, Accessories,
+    Electronics, Home or Beauty; prices are PKR. Returns up to 8 products."""
+    where, params = ["active"], []
+    if category:
+        where.append("lower(category) = lower(%s)")
+        params.append(category.strip())
+    if max_price is not None:
+        where.append("price <= %s")
+        params.append(int(max_price))
+    if min_price is not None:
+        where.append("price >= %s")
+        params.append(int(min_price))
+    if in_stock_only:
+        where.append("stock > 0")
+
+    # Score each product by how many query words appear in its name, category or description.
+    words = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2 and w not in STOP_WORDS]
+    words = [w[:-1] if w.endswith("s") and len(w) > 4 else w for w in words][:6]   # earbuds -> earbud
+    score = " + ".join(["(CASE WHEN (name || ' ' || category || ' ' || description) ILIKE %s THEN 1 ELSE 0 END)"]
+                       * len(words)) or "0"
+    sql = (f"SELECT id, name, category, price AS price_pkr, stock, description, ({score}) AS score "
+           f"FROM products WHERE {' AND '.join(where)} ORDER BY score DESC, price ASC LIMIT %s")
+    rows = db.query(sql, [f"%{w}%" for w in words] + params + [MAX_RESULTS * 3])
+
     note = ""
-    if is_urgent(patient, kind, value):
-        nurse_reply = interrupt({"alert": "reading above threshold", "patient": patient, "kind": kind, "value": value})
-        note = f" URGENT, reviewed by nurse: {nurse_reply}"
-    READINGS.append({"patient": patient, "kind": kind, "value": value, "time": now()})
-    return f"Logged {kind} {value}.{note}"
+    if words:
+        matched = [r for r in rows if r["score"] > 0]
+        if not matched:
+            note = "No product matched those words; these are other products within the filters."
+        rows = matched or rows
+    for r in rows:
+        r.pop("score")
+    if not rows:
+        return "No products found. Try a different category or price."
+    return as_json({"products": rows[:MAX_RESULTS], "note": note} if note else {"products": rows[:MAX_RESULTS]})
 
 
 @tool
-def log_symptom(symptom: str, runtime: ToolRuntime[CareContext]) -> str:
-    """Log a symptom the patient reports, e.g. 'headache since this morning'."""
-    SYMPTOMS.append({"patient": runtime.context.patient_token, "symptom": symptom, "time": now()})
-    return f"Logged symptom: {symptom}"
+def get_product_details(product_id: int) -> str:
+    """Full details of one product by its id (#number)."""
+    row = db.query_one("SELECT id, name, category, price AS price_pkr, stock, description "
+                    "FROM products WHERE id = %s AND active", [product_id])
+    return as_json(row) if row else f"No product with id {product_id}."
+
+
+# ── orders (two-step, confirmed by the customer) ──
+
+@tool
+def place_order(items: list[dict], shipping_address: str, customer_name: str,
+                runtime: ToolRuntime[ShopContext]) -> Command:
+    """Prepare an order. items: [{"product_id": 9, "quantity": 1}]. Needs the full shipping address
+    and the customer's name. This does NOT create the order: show the summary and ask the customer
+    to reply yes; then call confirm_action."""
+    if not items:
+        return reply(runtime, "Error: no items. Ask which product and how many.")
+    if len(shipping_address.strip()) < 10:
+        return reply(runtime, "Error: the shipping address is missing or too short. Ask for the full address.")
+    lines, total = [], 0
+    for item in items[:10]:
+        pid, qty = int(item.get("product_id", 0)), int(item.get("quantity", 1))
+        if not 1 <= qty <= MAX_QUANTITY:
+            return reply(runtime, f"Error: quantity must be 1 to {MAX_QUANTITY}.")
+        p = db.query_one("SELECT id, name, price, stock FROM products WHERE id = %s AND active", [pid])
+        if not p:
+            return reply(runtime, f"Error: no product with id {pid}.")
+        if p["stock"] < qty:
+            return reply(runtime, f"Error: {p['name']} has only {p['stock']} in stock.")
+        lines.append({"product_id": p["id"], "name": p["name"], "quantity": qty, "unit_price": p["price"]})
+        total += p["price"] * qty
+    pending = {"type": "order", "items": lines, "total": total,
+               "shipping_address": shipping_address.strip()[:300], "customer_name": customer_name.strip()[:80],
+               "asked_at": human_count(runtime)}
+    summary = {"items": lines, "total_pkr": total, "ship_to": pending["shipping_address"],
+               "name": pending["customer_name"], "payment": "cash on delivery", "delivery": "3 to 5 days"}
+    return reply(runtime, "CONFIRMATION_REQUIRED. Show this summary and ask the customer to reply yes: "
+                 + as_json(summary), pending_action=pending)
 
 
 @tool
-def get_recent_readings(runtime: ToolRuntime[CareContext], limit: int = 5) -> str:
-    """Get the patient's most recent home readings."""
-    mine = [r for r in READINGS if r["patient"] == runtime.context.patient_token][-limit:]
-    return "\n".join(f"{r['time']}  {r['kind']}: {r['value']}" for r in mine) or "No readings yet."
+def cancel_order(order_id: int, runtime: ToolRuntime[ShopContext]) -> Command:
+    """Prepare cancelling one of the customer's own orders (only status 'placed').
+    Ask the customer to reply yes; then call confirm_action."""
+    order = db.query_one("SELECT id, status, total FROM orders WHERE id = %s AND user_id = %s",
+                      [order_id, user_of(runtime)])
+    if not order:
+        return reply(runtime, f"You have no order #{order_id}.")
+    if order["status"] != "placed":
+        return reply(runtime, f"Order #{order_id} is {order['status']} and can't be cancelled now.")
+    pending = {"type": "cancel", "order_id": order["id"], "total": order["total"], "asked_at": human_count(runtime)}
+    return reply(runtime, f"CONFIRMATION_REQUIRED. Ask the customer to reply yes to cancel order "
+                 f"#{order_id} (Rs {order['total']:,}).", pending_action=pending)
 
 
 @tool
-def escalate_to_nurse(reason: str, runtime: ToolRuntime[CareContext]) -> str:
-    """Alert the nurse about a worrying SYMPTOM. Never use this for readings: log_reading alerts the nurse itself."""
-    return f"Nurse alerted about {runtime.context.patient_token}: {reason}"
+def confirm_action(runtime: ToolRuntime[ShopContext]) -> Command:
+    """Run the staged order or cancellation. Call ONLY when the customer's latest message says yes
+    to the summary you showed."""
+    pending = runtime.state.get("pending_action")
+    if not pending:
+        return reply(runtime, "Nothing is waiting for confirmation.")
+    # Enforced in code, not left to the model: the yes must be a NEW customer message after the summary.
+    messages = runtime.state.get("messages", [])
+    last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    if human_count(runtime) <= pending.get("asked_at", 0) or not last_human or not YES.match(last_human.text):
+        return reply(runtime, "Not confirmed: the customer must reply yes in a new message first.")
 
+    user_id = user_of(runtime)
+    if pending["type"] == "cancel":
+        with db.get_pool().connection() as conn, conn.transaction():
+            row = conn.execute("UPDATE orders SET status = 'cancelled' WHERE id = %s AND user_id = %s "
+                               "AND status = 'placed' RETURNING id", [pending["order_id"], user_id]).fetchone()
+            if row:   # put the stock back
+                conn.execute("UPDATE products p SET stock = p.stock + i.quantity FROM order_items i "
+                             "WHERE i.order_id = %s AND p.id = i.product_id", [row["id"]])
+        text = (f"Order #{pending['order_id']} is cancelled." if row
+                else f"Order #{pending['order_id']} could not be cancelled (it may have shipped).")
+        return reply(runtime, text, pending_action=None)
 
-# ── identity, booking, doctors (notebook 02) ──
+    # Place the order in one transaction: lock the products, check stock, reduce it, save the order.
+    try:
+        with db.get_pool().connection() as conn, conn.transaction():
+            for item in pending["items"]:
+                p = conn.execute("SELECT stock, name FROM products WHERE id = %s FOR UPDATE",
+                                 [item["product_id"]]).fetchone()
+                if not p or p["stock"] < item["quantity"]:
+                    raise ValueError(f"{item['name']} is no longer in stock")
+                conn.execute("UPDATE products SET stock = stock - %s WHERE id = %s",
+                             [item["quantity"], item["product_id"]])
+            order = conn.execute(
+                "INSERT INTO orders (user_id, customer_name, shipping_address, total) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                [user_id, pending["customer_name"], pending["shipping_address"], pending["total"]]).fetchone()
+            for item in pending["items"]:
+                conn.execute("INSERT INTO order_items (order_id, product_id, name, quantity, unit_price) "
+                             "VALUES (%s, %s, %s, %s, %s)",
+                             [order["id"], item["product_id"], item["name"], item["quantity"], item["unit_price"]])
+    except ValueError as e:
+        return reply(runtime, f"Order not placed: {e}.", pending_action=None)
+    return reply(runtime, f"ORDER PLACED: order #{order['id']}, total Rs {pending['total']:,}, cash on "
+                 f"delivery in 3 to 5 days, status 'placed'.", pending_action=None)
+
 
 @tool
-def verify_identity(date_of_birth: str, runtime: ToolRuntime[CareContext]) -> Command:
-    """Verify the patient's identity with their date of birth (YYYY-MM-DD). Required before booking."""
-    ok = PATIENTS[runtime.context.patient_token]["date_of_birth"] == date_of_birth
-    reply = "Identity verified." if ok else "That date of birth doesn't match our records."
-    return Command(update={"identity_verified": ok,
-                           "messages": [ToolMessage(reply, tool_call_id=runtime.tool_call_id)]})
+def get_my_orders(runtime: ToolRuntime[ShopContext], order_id: int | None = None) -> str:
+    """The customer's own orders with status, items and total (newest first)."""
+    sql = "SELECT id, status, total AS total_pkr, shipping_address, created_at::date AS date FROM orders WHERE user_id = %s"
+    params = [user_of(runtime)]
+    if order_id is not None:
+        sql += " AND id = %s"
+        params.append(order_id)
+    orders = db.query(sql + " ORDER BY id DESC LIMIT 10", params)
+    if not orders:
+        return "This customer has no orders yet."
+    for o in orders:
+        o["items"] = db.query("SELECT name, quantity FROM order_items WHERE order_id = %s", [o["id"]])
+    return as_json(orders)
+
+
+# ── long-term memory (LangGraph Store, namespace ('memories', user_id)) ──
+
+def memory_namespace(user_id: str) -> tuple:
+    return ("memories", user_id)
 
 
 @tool
-def list_free_slots() -> str:
-    """List free appointment slots with the patient's doctor."""
-    return "\n".join(FREE_SLOTS)
-
-
-@tool
-def book_appointment(slot: str, runtime: ToolRuntime[CareContext]) -> str:
-    """Book one of the free slots (exact text from list_free_slots)."""
-    if slot not in FREE_SLOTS:
-        return f"{slot} is not free. Free slots: {', '.join(FREE_SLOTS)}"
-    FREE_SLOTS.remove(slot)
-    APPOINTMENTS.append({"patient": runtime.context.patient_token, "slot": slot})
-    return f"Booked {slot}."
-
-
-@tool
-def patients_needing_attention() -> str:
-    """For doctors: list patients whose latest reading breached their threshold."""
-    latest = {r["patient"]: r for r in READINGS}
-    flagged = [f"{pid} ({PATIENTS[pid]['condition']}): {r['kind']} {r['value']} at {r['time']}"
-               for pid, r in latest.items() if is_urgent(pid, r["kind"], r["value"])]
-    return "\n".join(flagged) or "No patients above threshold right now."
-
-
-# ── long-term memory (notebook 06) ──
-
-def memory_namespace(patient_token: str):
-    return ("memories", patient_token)
-
-
-@tool
-def remember(fact: str, runtime: ToolRuntime[CareContext]) -> str:
-    """Save a lasting fact about the patient worth following up next time, e.g. 'knee pain when walking'."""
-    runtime.store.put(memory_namespace(runtime.context.patient_token), str(uuid4()), {"fact": fact})
+def remember(fact: str, runtime: ToolRuntime[ShopContext]) -> str:
+    """Save ONE lasting fact about the customer for future chats: name, address, sizes, budget,
+    preferences. Never passwords, card/bank/ID numbers, or one-off requests."""
+    fact = " ".join(fact.split())[:300]
+    if not fact:
+        return "Nothing to remember."
+    if SENSITIVE.search(fact):   # enforced in code as well as in the prompt
+        return "Not saved: never store passwords, card, bank or ID numbers."
+    ns = memory_namespace(user_of(runtime))
+    existing = runtime.store.search(ns, limit=100)
+    if any(i.value.get("fact", "").lower() == fact.lower() for i in existing):
+        return "Already remembered."
+    if len(existing) >= 100:
+        return "Memory is full; ask the customer which facts to forget."
+    runtime.store.put(ns, str(uuid4()), {"fact": fact})
     return f"Remembered: {fact}"
 
 
 @tool
-def export_my_memories(runtime: ToolRuntime[CareContext]) -> str:
-    """Show the patient everything remembered about them."""
-    items = runtime.store.search(memory_namespace(runtime.context.patient_token), limit=100)
-    return "\n".join(f"- {i.value['fact']}" for i in items) or "Nothing remembered."
-
-
-@tool
-def forget_me(runtime: ToolRuntime[CareContext]) -> str:
-    """Delete everything remembered about the patient. Only when they explicitly ask."""
-    items = runtime.store.search(memory_namespace(runtime.context.patient_token), limit=1000)
+def forget_me(runtime: ToolRuntime[ShopContext]) -> str:
+    """Delete everything ShopBot remembers about this customer (when they ask)."""
+    ns = memory_namespace(user_of(runtime))
+    items = runtime.store.search(ns, limit=1000)
     for item in items:
         runtime.store.delete(item.namespace, item.key)
-    return f"Deleted {len(items)} memories."
+    return f"Forgot {len(items)} saved fact(s)."
+
+
+TOOLS = [search_products, get_product_details, place_order, cancel_order, confirm_action,
+         get_my_orders, remember, forget_me]
+__all__ = ["TOOLS", "memory_namespace", "MEMORY_LIMIT"]
