@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shop · Bazaar Lane</title>
+  <meta name="description" content="Browse every Bazaar Lane product and buy with ShopBot.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./">
+      <span class="brand-mark">BL</span>
+      <span><strong>Bazaar Lane</strong><small>Shop with ShopBot</small></span>
+    </a>
+    <nav class="nav">
+      <a href="./">Home</a>
+      <a href="shop.html" class="active">Shop</a>
+      <a href="#orders" data-sc-open="orders">My orders</a>
+    </nav>
+    <div class="topbar-right">
+      <span class="user-chip" data-sc-user hidden></span>
+      <button type="button" class="btn btn-ghost btn-sm" data-sc-switch>Sign in</button>
+      <a class="btn btn-ghost btn-sm" href="admin.html">Seller admin</a>
+    </div>
+  </header>
+
+  <div id="apiBanner" class="banner" hidden></div>
+
+  <main class="shop-layout">
+    <aside class="filters" aria-label="Filters">
+      <button type="button" class="btn btn-ghost btn-block filters-toggle" id="filtersToggle">Filters ▾</button>
+      <div class="filters-body" id="filtersBody">
+        <label>Search
+          <input id="search" class="input" type="search" placeholder="Name or description…">
+        </label>
+        <div class="filter-group">
+          <span class="filter-label">Category</span>
+          <div id="catChips" class="chips"></div>
+        </div>
+        <label>Max price: <span id="priceLabel" class="price-label">Any</span>
+          <input id="maxPrice" type="range" min="0" max="10000" step="500" value="10000">
+        </label>
+        <label class="check"><input id="inStock" type="checkbox"> In stock only</label>
+        <label>Sort by
+          <select id="sort" class="input">
+            <option value="featured">Featured</option>
+            <option value="price-asc">Price: low to high</option>
+            <option value="price-desc">Price: high to low</option>
+            <option value="name">Name (A–Z)</option>
+          </select>
+        </label>
+        <button type="button" id="reset" class="btn btn-ghost btn-block">Reset filters</button>
+
+        <form class="help-box" id="helpForm">
+          <strong>🤖 Not sure what to pick?</strong>
+          <p class="muted small">Tell ShopBot what you need and it'll suggest the best options.</p>
+          <input id="helpInput" class="input" placeholder="e.g. a warm shawl for winter" maxlength="300">
+          <button type="submit" class="btn btn-primary btn-block">Ask ShopBot</button>
+        </form>
+      </div>
+    </aside>
+
+    <section class="shop-results">
+      <div class="results-head">
+        <h1 id="resultsTitle">All products</h1>
+        <span id="resultsCount" class="muted"></span>
+      </div>
+      <div id="grid" class="grid"><div class="empty">Loading products…</div></div>
+    </section>
+  </main>
+
+  <div id="productModal" class="modal" hidden>
+    <div class="modal-card product-modal" role="dialog" aria-modal="true" aria-labelledby="pmName">
+      <button type="button" class="modal-x" id="pmClose" aria-label="Close">✕</button>
+      <div class="pm-thumb" id="pmThumb" aria-hidden="true"></div>
+      <div class="product-meta"><span class="muted" id="pmId"></span><span class="tag" id="pmCat"></span></div>
+      <h2 id="pmName"></h2>
+      <p id="pmDesc" class="muted"></p>
+      <div class="product-foot"><span class="price" id="pmPrice"></span><span id="pmStock"></span></div>
+      <div class="row">
+        <button type="button" class="btn btn-ghost" id="pmAsk">Ask a question</button>
+        <button type="button" class="btn btn-primary" id="pmBuy">Buy with ShopBot</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div>
+      <strong>Bazaar Lane</strong>
+      <p class="muted small">A small online store, with ShopBot as your AI sales assistant.</p>
+    </div>
+    <nav class="footer-links">
+      <a href="./">Home</a>
+      <a href="shop.html">Shop</a>
+      <a href="#orders" data-sc-open="orders">My orders</a>
+      <a href="admin.html">Seller admin</a>
+    </nav>
+    <p class="muted small">© 2026 Bazaar Lane. Prices in PKR.</p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="chat.js"></script>
+  <script src="shop.js"></script>
+</body>
+</html>

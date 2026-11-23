@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Bazaar Lane Admin</title>
+  <meta name="description" content="Seller dashboard for Bazaar Lane and ShopBot.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="admin.html">
+      <span class="brand-mark">BL</span>
+      <span><strong>Bazaar Lane</strong><small>Seller dashboard</small></span>
+    </a>
+    <nav class="nav">
+      <a href="./">Home</a>
+      <a href="shop.html">Shop</a>
+      <a href="admin.html" class="active">Seller admin</a>
+    </nav>
+    <div class="topbar-right">
+      <button id="refresh" class="btn btn-ghost btn-sm" type="button" hidden>Refresh</button>
+      <button id="logout" class="btn btn-ghost btn-sm" type="button" hidden>Log out</button>
+    </div>
+  </header>
+
+  <div id="apiBanner" class="banner" hidden></div>
+
+  <main id="dashboard" class="admin" hidden>
+    <section id="stats" class="stats"></section>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="orders" type="button">Orders</button>
+      <button class="tab" data-tab="products" type="button">Products</button>
+      <button class="tab" data-tab="conversations" type="button">Conversations</button>
+      <button class="tab" data-tab="customers" type="button">Customers</button>
+    </nav>
+
+    <div id="tab-orders" class="tab-panel">
+      <div class="table-wrap"><table class="table" id="ordersTable"></table></div>
+    </div>
+
+    <div id="tab-products" class="tab-panel" hidden>
+      <div class="panel-head">
+        <p class="muted">Edit price or stock and press Enter (or click away) to save. Untick "Visible" to hide a product from the store.</p>
+        <button id="addProduct" class="btn btn-primary" type="button">+ Add product</button>
+      </div>
+      <div class="table-wrap"><table class="table" id="productsTable"></table></div>
+    </div>
+
+    <div id="tab-conversations" class="tab-panel" hidden>
+      <div class="panel-head">
+        <input id="convFilter" class="input" type="search" placeholder="Filter by user, thread or text…" aria-label="Filter conversations">
+        <label class="check"><input id="convBlocked" type="checkbox"> Blocked only</label>
+      </div>
+      <div class="table-wrap"><table class="table" id="convTable"></table></div>
+    </div>
+
+    <div id="tab-customers" class="tab-panel" hidden>
+      <div class="table-wrap"><table class="table" id="customersTable"></table></div>
+    </div>
+  </main>
+
+  <div id="login" class="modal">
+    <form id="loginForm" class="modal-card">
+      <h2>Seller login</h2>
+      <p class="muted">Enter the admin token to open the dashboard.</p>
+      <label>Admin token <input id="token" class="input" type="password" required autocomplete="current-password"></label>
+      <p id="loginError" class="error" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit">Log in</button>
+    </form>
+  </div>
+
+  <div id="productModal" class="modal" hidden>
+    <form id="productForm" class="modal-card">
+      <h2>Add product</h2>
+      <label>Name <input name="name" class="input" required maxlength="120"></label>
+      <label>Category <input name="category" class="input" required maxlength="60" list="categoryList"></label>
+      <datalist id="categoryList"></datalist>
+      <div class="row">
+        <label>Price (PKR) <input name="price" class="input" type="number" min="0" step="1" required></label>
+        <label>Stock <input name="stock" class="input" type="number" min="0" step="1" required></label>
+      </div>
+      <label>Description <textarea name="description" class="input" rows="3" maxlength="1000"></textarea></label>
+      <div class="row row-end">
+        <button id="cancelProduct" class="btn btn-ghost" type="button">Cancel</button>
+        <button class="btn btn-primary" type="submit">Add product</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>
