@@ -1,0 +1,34 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# Creates the agent API (Docker), the website (static) and a Postgres database.
+services:
+  - type: web
+    name: shopbot-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false            # Render asks for it when you create the Blueprint
+      - key: ADMIN_TOKEN
+        generateValue: true    # random token; copy it from the service's Environment tab
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shopbot-db
+          property: connectionString
+
+  - type: web
+    name: shopbot-web
+    runtime: static
+    rootDir: web
+    buildCommand: echo "window.SHOPBOT_API = \"${API_URL}\";" > config.js
+    staticPublishPath: .
+    envVars:
+      - key: API_URL           # public URL of shopbot-api; change it if Render gives a different one
+        value: https://shopbot-api.onrender.com
+
+databases:
+  - name: shopbot-db
+    plan: free
+    databaseName: shopbot
+    user: shopbot
