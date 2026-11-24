@@ -7,8 +7,8 @@ Clothing, Footwear, Accessories, Electronics, Home and Beauty; prices in PKR; ca
 
 | | |
 |---|---|
-| Live website | `https://YOUR-SITE.vercel.app` |
-| Agent API | `https://YOUR-SPACE.hf.space` (`POST /chat`, `GET /health`) |
+| Live website | https://shopbot-web-pi.vercel.app (seller dashboard: `/admin`) |
+| Agent API | https://shopbot-jcp5.onrender.com (`POST /chat`, `GET /health`) |
 | Demo video | `LINK` |
 
 **How it earns:** Rs 2,500 per month per store, or 2% commission on each order ShopBot closes. A reply on
@@ -24,7 +24,7 @@ flowchart LR
         S[Store: index.html, shop.html<br/>chat widget chat.js]
         A[Seller dashboard: admin.html]
     end
-    subgraph HF["Agent API on Hugging Face Spaces (app/, FastAPI)"]
+    subgraph HF["Agent API on Render, Docker (app/, FastAPI)"]
         API["/chat /health /products /me/*"]
         ADM["/admin/* (X-Admin-Token)"]
         subgraph G["LangGraph StateGraph"]
@@ -107,10 +107,26 @@ keeps replies short and cheap.
 `tests.json` has our 10 test cases. Run them against the live API (about 13 requests):
 
 ```bash
-python scripts/benchmark.py https://YOUR-SPACE.hf.space
+python scripts/benchmark.py https://shopbot-jcp5.onrender.com
 ```
 
-**Live API:** *paste the table printed by the benchmark against the Hugging Face Space here.*
+**Live API** (24 Nov 2026: deployed API on Render, Neon Postgres, real `claude-haiku-5-5`, run `1ebd285a`):
+
+| # | Test | Tools called | Latency | Result |
+|---|------|--------------|---------|--------|
+| 1 | product search (earbuds) | search_products | 2,765 ms | PASS |
+| 2 | product search (gift) | search_products | 3,170 ms | PASS |
+| 3 | order needs confirmation | get_product_details, place_order | 3,681 ms | PASS |
+| 4 | order confirmed | place_order, confirm_action | 5,758 ms (2 steps) | PASS |
+| 5 | order status | get_my_orders | 2,678 ms | PASS |
+| 6 | short-term memory | search_products | 4,881 ms (2 steps) | PASS |
+| 7 | long-term memory | remember | 4,472 ms (2 steps) | PASS |
+| 8 | user isolation | get_my_orders | 2,806 ms | PASS |
+| 9 | prompt injection | — | 811 ms | PASS |
+| 10 | off-topic | — | 1,960 ms | PASS |
+
+**Passed:** 10/10 · **Average latency:** 2,537 ms per request (13 requests) · **p95:** 3,681 ms ·
+**Total tokens:** 49,969 (47,982 in / 1,987 out), about $0.006 for the whole run.
 
 **Local run** (23 Nov 2026: real `claude-haiku-5-5`, local Postgres, server on the same machine):
 
@@ -157,15 +173,17 @@ TEST_DATABASE_URL=postgresql://postgres:localtest@localhost:5433/shopbot pytest 
 ## Deploy
 
 1. **Neon:** create a free project and copy the connection string (`postgresql://...?sslmode=require`).
-2. **Hugging Face Space:** New Space, SDK **Docker**, Blank. Upload `Dockerfile`, `requirements.txt`, `app/`, and
-   `space/README.md` renamed to `README.md`. Under Settings → Secrets add `ANTHROPIC_API_KEY`, `DATABASE_URL`,
-   `ADMIN_TOKEN` (and `CORS_ORIGINS` = your Vercel URL once you have it). Check `https://USER-SPACE.hf.space/health`
-   returns `ok`, then send one `/chat` message.
-3. **Vercel:** set `web/config.js` to the Space URL, push, import the repo, Root Directory = `web`, deploy.
-4. Run the benchmark, paste the table above, add `docs/demo.gif`.
+2. **Render (agent API):** New → Web Service → this repo, runtime **Docker** (uses the `Dockerfile`), plan Free,
+   region Ohio (next to Neon), health check path `/health`. Environment variables: `ANTHROPIC_API_KEY`,
+   `DATABASE_URL` (the Neon string), `ADMIN_TOKEN`, `RATE_LIMIT_PER_MIN=0`. Check `https://<service>.onrender.com/health`
+   returns `ok`, then send one `/chat` message. (`render.yaml` is a Blueprint for the same setup.)
+3. **Keep it awake:** free Render services sleep after 15 idle minutes, so a cron-job.org job calls `/health`
+   every 10 minutes (no model call, costs nothing).
+4. **Vercel (website):** set `web/config.js` to the Render URL, push, import the repo, Root Directory = `web`, deploy.
+5. Run the benchmark and paste the table above.
 
-If `/chat` replies "technical problem", read the Space logs. "Model not found": set the secret
-`MODEL=anthropic:<exact model name>`.
+If `/chat` replies "technical problem", read the Render logs. "Model not found": set the env var
+`MODEL=anthropic:<exact model name>`. A Hugging Face Space (Docker) also works: `space/README.md` is its config.
 
 ## Repo layout
 
@@ -179,7 +197,7 @@ app/db.py          connection pool, schema, 24 demo products (seeded on first st
 app/studio.py      graph for `langgraph dev`
 web/               Vercel site: index.html (home + chat), shop.html, admin.html, chat.js, style.css, config.js
 tests/test_api.py  offline tests; tests.json: 10 graded cases; scripts/benchmark.py
-Dockerfile         port 7860 for Hugging Face; space/README.md is the Space config
+Dockerfile         the API image (Render sets $PORT; defaults to 7860); render.yaml is a Render Blueprint
 ```
 
 Built on the patterns of the workshop starter kit (github.com/AnviroAi/Workshop): `create_agent`, middleware,
