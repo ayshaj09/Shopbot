@@ -73,6 +73,20 @@
     return hit ? CATEGORY_EMOJI[hit] : "🛍️";
   }
 
+  // Product picture: the seller's image_url if set, else the bundled photo for the 24 demo
+  // products (img/products/<id>.jpg). The category emoji sits underneath as a fallback and
+  // shows if there is no picture or it fails to load.
+  const DEMO_PHOTOS = 24;
+  function productImage(p) {
+    const id = Number(p.id);
+    const src = String(p.image_url || "").trim() ||
+      (id >= 1 && id <= DEMO_PHOTOS ? "img/products/" + id + ".jpg" : "");
+    const img = src
+      ? '<img src="' + esc(src) + '" alt="' + esc(p.name) + '" loading="lazy" onerror="this.remove()">'
+      : "";
+    return '<span class="thumb-emoji" aria-hidden="true">' + categoryEmoji(p.category) + "</span>" + img;
+  }
+
   // Bot replies: escape first, then allow **bold** and line breaks.
   function formatReply(text) {
     return esc(text)
@@ -95,7 +109,7 @@
   function productCard(p) {
     const inStock = (Number(p.stock) || 0) > 0;
     return '<article class="card product" data-id="' + esc(p.id) + '" tabindex="0">' +
-      '<div class="thumb" aria-hidden="true">' + categoryEmoji(p.category) + "</div>" +
+      '<div class="thumb">' + productImage(p) + "</div>" +
       '<div class="product-body">' +
         '<div class="product-meta"><span class="muted">#' + esc(p.id) + '</span><span class="tag">' + esc(p.category) + "</span></div>" +
         "<h3>" + esc(p.name) + "</h3>" +
@@ -135,7 +149,7 @@
   }
 
   window.SB = {
-    API, ApiError, api, esc, qs, money, fmtDate, CATEGORIES, categoryEmoji, formatReply,
+    API, ApiError, api, esc, qs, money, fmtDate, CATEGORIES, categoryEmoji, productImage, formatReply,
     statusBadge, stockLabel, productCard, buyMessage, storage, toast, banner,
   };
 })();

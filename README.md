@@ -196,6 +196,8 @@ app/context.py     settings from env vars, ShopContext(user_id)
 app/db.py          connection pool, schema, 24 demo products (seeded on first start)
 app/studio.py      graph for `langgraph dev`
 web/               Vercel site: index.html (home + chat), shop.html, admin.html, chat.js, style.css, config.js
+web/img/products/  placeholder photos for the 24 demo products (from Unsplash, free to use); a product's
+                   image_url, set in the dashboard, takes priority
 tests/test_api.py  offline tests; tests.json: 10 graded cases; scripts/benchmark.py
 Dockerfile         the API image (Render sets $PORT; defaults to 7860); render.yaml is a Render Blueprint
 ```

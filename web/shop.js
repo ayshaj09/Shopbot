@@ -1,6 +1,6 @@
 // Shop page: filters, sorting, product grid and details popup.
 (function () {
-  const { api, esc, money, CATEGORIES, categoryEmoji, productCard, stockLabel, buyMessage, banner } = window.SB;
+  const { api, esc, money, CATEGORIES, categoryEmoji, productImage, productCard, stockLabel, buyMessage, banner } = window.SB;
   const $ = (s) => document.querySelector(s);
   const params = new URLSearchParams(location.search);
 
@@ -124,7 +124,7 @@
   let current = null;
   function openProduct(p) {
     current = p;
-    $("#pmThumb").textContent = categoryEmoji(p.category);
+    $("#pmThumb").innerHTML = productImage(p);
     $("#pmId").textContent = "#" + p.id;
     $("#pmCat").textContent = p.category;
     $("#pmName").textContent = p.name;
